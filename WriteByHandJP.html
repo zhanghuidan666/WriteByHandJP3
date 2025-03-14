@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Interactive Text Handwriting Page</title>
+  <!-- 引入 Tesseract.js，用于手写 OCR -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden; /* 防止出现滚动条 */
+      background: #fff;
+    }
+    body {
+      position: relative;
+    }
+    /* 中央输入框和按钮容器（包含输入框和手写板） */
+    #input-container {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      z-index: 1000;
+    }
+    /* “开始”按钮样式 */
+    #start-btn {
+      width: 120px;
+      height: 40px;
+      background: #000;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+    #start-btn:focus {
+      outline: none;
+    }
+    /* 文本输入框样式 */
+    #text-input {
+      width: 250px;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+      background-color: #f0f0f0;
+      color: #333;
+      text-align: center;
+      margin-bottom: 10px;
+    }
+    #text-input:focus {
+      outline: none;
+    }
+    /* 手写板区域样式 */
+    #handwriting-pad {
+      width: 250px;
+      height: 150px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+      background-color: #f0f0f0;
+      margin-bottom: 10px;
+      cursor: crosshair;
+    }
+    /* 提交按钮样式 */
+    #submit-btn {
+      width: 40px;
+      height: 40px;
+      background: #000;
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #submit-btn:focus {
+      outline: none;
+    }
+    /* 文本出现的渐入放大动画 */
+    @keyframes fadeZoomIn {
+      0% {
+        opacity: 0;
+        transform: scale(0.5);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+    /* 已出现文本的持续轻微缩放动画 */
+    @keyframes pulse {
+      0%, 100% {
+        transform: scale(1);
+      }
+      50% {
+        transform: scale(1.2);
+      }
+    }
+    /* 漂浮文本的基础样式 */
+    .floating-text {
+      position: absolute;
+      opacity: 0;
+    }
+    /* 右上角滑块容器 */
+    #slider-container {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255,255,255,0.8);
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 8px;
+      z-index: 2000;
+      font-size: 14px;
+    }
+    #slider-container label {
+      margin-right: 5px;
+    }
+    #slider-container input[type=range] {
+      width: 100px;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+  <div id="slider-container">
+    <div class="slider-row">
+      <label for="textSlider" style="margin-right:5px;">Text:</label>
+      <div class="slider-wrap">
+        <span>EN</span>
+        <input id="textSlider" type="range" min="1" max="7" value="2" />
+        <span>JP</span>
+      </div>
+      <span id="textVal">2</span>
+    </div>
+    <div class="slider-row">
+      <label for="audioSlider" style="margin-right:5px;">Audio:</label>
+      <div class="slider-wrap">
+        <span>EN</span>
+        <input id="audioSlider" type="range" min="1" max="7" value="2" />
+        <span>JP</span>
+      </div>
+      <span id="audioVal">2</span>
+    </div>
+  </div>
+
+  <div id="input-container">
+    <button id="start-btn" type="button">Start</button>
+     <!-- 新增的提示文本（显示当前 en 内容的日语翻译提示） -->
+  <div id="instruction" style="margin-bottom: 10px; font-size: 16px;"></div>
+    <input id="text-input" type="text" placeholder="Please enter the content or write below" />
+    <canvas id="handwriting-pad" width="250" height="150"></canvas>
+    <button id="submit-btn" type="button">&#x2192;</button>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      /************************************************************
+       * 1. 定义三轮内容，每轮包含英文 (en) 与日语 (jp) 两套文本与音频
+       ************************************************************/
+       var textList = [
+        {
+          en: {
+            text: "私",
+            audios: ["./私1.mp3", "./私2.mp3", "./私3.mp3", "./私4.mp3"]
+          },
+          jp: [
+            { text: "私は学生です", audio: "./私extend1.mp3" },
+            { text: "これは私の本です", audio: "./私extend2.mp3" },
+            { text: "私の名前は鈴木です", audio: "./私extend3.mp3" },
+            { text: "私の意見はこうです", audio: "./私extend4.mp3" },
+            { text: "私だけが知っています", audio: "./私extend5.mp3" },
+            { text: "私に任せてください", audio: "./私extend6.mp3" }
+            ]
+        },
+        {
+          en: {
+            text: "自由",
+            audios: ["./自由1.mp3", "./自由2.mp3", "./自由3.mp3","./自由4.mp3","./自由5.mp3","./自由6.mp3","./自由7.mp3", "./自由8.mp3"]
+          },
+          jp: [
+            { text: "自由は大切です", audio: "./自由Extend1.mp3" },
+            { text: "私は自由に生きたいです", audio: "./自由Extend2.mp3" },
+            { text: "この国は自由な社会です", audio: "./自由Extend3.mp3" },
+            { text: "自由と平等が共に実現される社会が理想です", audio: "./自由Extend4.mp3" },
+            { text: "自由を守るためには、みんなの協力が必要です", audio: "./自由Extend5.mp3" },
+            { text: "この場所では、誰でも自由に歩けます", audio: "./自由Extend6.mp3" }
+            ]
+        },
+        {
+          en: {
+            text: "騙された",
+            audios: ["./騙された1.mp3", "./騙された2.mp3", "./騙された3.mp3", "./騙された4.mp3"]
+          },
+          jp: [
+            { text: "昨日、騙された", audio: "./騙されたExtend1.mp3" },
+            { text: "本当に騙されたと思う", audio: "./騙されたExtend2.mp3" },
+            { text: "騙された後、心が痛んだ", audio: "./騙されたExtend3.mp3" },
+            { text: "あの噂で多くの人が騙された", audio: "./騙されたExtend4.mp3" },
+            { text: "どうしてあんなに騙されたのか、全然分からない", audio: "./騙されたExtend5.mp3" },
+            { text: "こんなに簡単に騙されたのは初めてだ", audio: "./騙されたExtend6.mp3" }
+            ]
+        },
+        {
+          en: {
+            text: "好きなものをどんどん召し上がってください",
+            audios: ["./好きなもの1.mp3", "./好きなもの2.mp3", "./好きなもの3.mp3", "./好きなもの4.mp3"]
+          },
+          jp: [
+            { text: "お好きな飲み物をどんどんお選びください", audio: "./好きなものextend1.mp3" },
+            { text: "お好きなスイーツをどんどんお試しください", audio: "./好きなものextend2.mp3" },
+            { text: "お好きな時間をどんどん楽しんでください", audio: "./好きなものextend3.mp3" },
+            { text: "好きな映画をどんどんご覧ください", audio: "./好きなものextend4.mp3" },
+            { text: "好きな本をどんどんお読みください", audio: "./好きなものextend5.mp3" },
+            { text: "好きな場所をどんどん訪れてください", audio: "./好きなものextend6.mp3" }
+            ]
+        }
+      ];
+      /************************************************************
+       * 2. 定义英文与日语字体列表
+       ************************************************************/
+      var fontFamiliesEN = ["MS Gothic", "MS Mincho", "Yu Gothic UI", "Meiryo", "Hiragino Sans", "Yuji mai", "Mochiy Pop P One", "Kaisei Tokumin"];
+      var fontFamiliesJP = ["MS Gothic", "MS Mincho", "Yu Gothic UI", "Meiryo", "Hiragino Sans", "Yuji mai", "Mochiy Pop P One", "Kaisei Tokumin"];
+      /************************************************************
+       * 3. 定义颜色配色及其他变量
+       ************************************************************/
+      var colorPalette = ["#FF5733", "#33FF57", "#3357FF", "#FF33A1", "#FF8C33", "#8C33FF"];
+      var enToJp = {
+        "私": "I",
+        "自由": "Freedom",
+        "騙された": "I was deceived",
+        "好きなものをどんどん召し上がってください": "Please help yourself to as much as you like"
+      };
+      var currentIndex = 0;
+      var currentAudio = null;
+      var textInterval = null;
+      var textElements = [];
+      var currentRoundStartTime = 0;
+      var currentRoundTypingTime = 0;
+      var currentTypingStart = null;
+      var currentTypingTimeout = null;
+      var roundDurations = [];
+      var typingDurations = [];
+
+
+      // 【新增】手写板区域操作时长的变量
+      var currentHandwritingTime = 0;
+      var currentHandwritingStart = null;
+      var currentHandwritingTimeout = null;
+      var handwritingDurations = [];
+
+
+      var input = document.getElementById('text-input');
+      var submitBtn = document.getElementById('submit-btn');
+      var startBtn = document.getElementById('start-btn');
+      var canvas = document.getElementById('handwriting-pad');
+      var ctx = canvas.getContext('2d');
+
+      /************************************************************
+       * 4. 获取滑块及其显示数值（范围1～7，初始值为2）
+       ************************************************************/
+      var textSlider = document.getElementById('textSlider');
+      var audioSlider = document.getElementById('audioSlider');
+      var textVal = document.getElementById('textVal');
+      var audioVal = document.getElementById('audioVal');
+
+      textVal.textContent = textSlider.value;
+      audioVal.textContent = audioSlider.value;
+
+      textSlider.addEventListener('input', function() {
+        textVal.textContent = textSlider.value;
+      });
+      audioSlider.addEventListener('input', function() {
+        audioVal.textContent = audioSlider.value;
+      });
+
+      /************************************************************
+       * 5. 手写板绘制逻辑（保持不变）
+       ************************************************************/
+      var drawing = false, lastX = 0, lastY = 0;
+      var recognitionDelay = 1000; // 停笔后 1 秒再识别
+      var recognitionTimer = null;
+
+      function getCanvasPos(e) {
+        var rect = canvas.getBoundingClientRect();
+        var x, y;
+        if (e.touches) {
+          x = e.touches[0].clientX - rect.left;
+          y = e.touches[0].clientY - rect.top;
+        } else {
+          x = e.clientX - rect.left;
+          y = e.clientY - rect.top;
+        }
+        return { x: x, y: y };
+      }
+      
+      function startDrawing(e) {
+        drawing = true;
+        // 【新增】记录手写板操作开始
+        handwritingInteractionDetected();
+        if (recognitionTimer) {
+          clearTimeout(recognitionTimer);
+          recognitionTimer = null;
+        }
+        var pos = getCanvasPos(e);
+        lastX = pos.x;
+        lastY = pos.y;
+      }
+      
+      function draw(e) {
+        if (!drawing) return;
+         // 【新增】每次绘制时记录操作
+         handwritingInteractionDetected();
+        var pos = getCanvasPos(e);
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+        ctx.stroke();
+        lastX = pos.x;
+        lastY = pos.y;
+      }
+      
+      function endDrawing(e) {
+        drawing = false;
+        if (recognitionTimer) clearTimeout(recognitionTimer);
+        recognitionTimer = setTimeout(function() {
+          recognizeHandwriting();
+          recognitionTimer = null;
+        }, recognitionDelay);
+      }
+      
+      canvas.addEventListener('mousedown', startDrawing);
+      canvas.addEventListener('mousemove', draw);
+      canvas.addEventListener('mouseup', endDrawing);
+      canvas.addEventListener('mouseout', function() { drawing = false; });
+      canvas.addEventListener('touchstart', function(e) { e.preventDefault(); startDrawing(e); });
+      canvas.addEventListener('touchmove', function(e) { e.preventDefault(); draw(e); });
+      canvas.addEventListener('touchend', function(e) { e.preventDefault(); endDrawing(e); });
+
+      /************************************************************
+       * 6. 使用 Tesseract.js 进行手写 OCR 识别（保持不变）
+       ************************************************************/
+      function recognizeHandwriting() {
+        var dataURL = canvas.toDataURL('image/png');
+        Tesseract.recognize(dataURL, 'jpn', {
+          logger: m => console.log(m),
+          // 白名单设为常用日语字符（平假名、片假名、汉字常用区以及日语标点）
+          tessedit_char_whitelist: 'ぁ-んァ-ン一-龥、。！？　',
+          preserve_interword_spaces: '1'
+        })
+        .then(({ data: { text } }) => {
+          // 更新正则过滤：允许平假名、片假名、汉字、日语标点及空格
+          let recognizedText = text.replace(/[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FBF、。！？　 ]/g, '').trim();
+          if (input.value.trim() !== "") {
+            input.value = input.value.trim() + " " + recognizedText;
+          } else {
+            input.value = recognizedText;
+          }
+          // 让输入框获得焦点
+          input.focus();
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        })
+        .catch(err => {
+          console.error(err);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        });
+      }
+
+      function handwritingInteractionDetected() {
+        var now = Date.now();
+        if (currentHandwritingStart === null) {
+          currentHandwritingStart = now;
+        }
+        if (currentHandwritingTimeout) {
+          clearTimeout(currentHandwritingTimeout);
+        }
+        currentHandwritingTimeout = setTimeout(function() {
+          if (currentHandwritingStart !== null) {
+            currentHandwritingTime += (Date.now() - currentHandwritingStart);
+            currentHandwritingStart = null;
+          }
+        }, 2000);
+      }
+
+
+     
+      /************************************************************
+       * 8. “开始”按钮 -> 启动当前轮，同时启动语音识别
+       ************************************************************/
+      startBtn.addEventListener('click', function() {
+        startBtn.parentNode.removeChild(startBtn);
+        startRound();
+      });
+
+      function startRound() {
+        if (currentIndex >= textList.length) {
+          alert("所有文本都已完成！");
+          return;
+        }
+        roundActive = true;
+        clearTexts();
+        // 新增：记录当前轮开始时间，并重置本轮的打字计时变量
+        currentRoundStartTime = Date.now();
+        currentRoundTypingTime = 0;
+        currentTypingStart = null;
+        if (currentTypingTimeout) {
+          clearTimeout(currentTypingTimeout);
+          currentTypingTimeout = null;
+        }
+        // 【新增】重置手写板区域的计时变量
+        currentHandwritingTime = 0;
+        currentHandwritingStart = null;
+        if (currentHandwritingTimeout) {
+          clearTimeout(currentHandwritingTimeout);
+          currentHandwritingTimeout = null;
+        }
+        input.value = "";
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        var item = textList[currentIndex];
+        // 新增：设置提示文本，获取当前 en 文本的日语翻译
+        var instruction = document.getElementById('instruction');
+        var enText = item.en.text;
+        var jpTranslation = enToJp[enText] || enText; // 如果找不到翻译，则使用原文本
+        instruction.textContent = "What is the Japanese for '" + jpTranslation + "”'?";
+
+        // 初始化 en 分支的音频列表（复制一份，保证前后不重复）
+        enAudiosLeft = item.en.audios.slice();
+        // 初始化 jp 分支的索引
+        currentJpPairIndex = 0;
+        // 开始播放第一个文本及对应语音（此轮循环播放）
+        playNextTextAndAudio(item);
+
+      
+      }
+
+      function stopRound() {
+        roundActive = false;
+        if (nextTextTimeoutId) {
+          clearTimeout(nextTextTimeoutId);
+          nextTextTimeoutId = null;
+        }
+        if (currentAudio) {
+          currentAudio.pause();
+          currentAudio = null;
+        }
+     
+        clearTexts();
+      }
+
+      function nextRound() {
+        // 新增：若当前正在打字，结束计时
+        if (currentTypingStart !== null) {
+          currentRoundTypingTime += (Date.now() - currentTypingStart);
+          currentTypingStart = null;
+          if (currentTypingTimeout) {
+            clearTimeout(currentTypingTimeout);
+            currentTypingTimeout = null;
+          }
+        }
+        // 【新增】若手写板区域有操作正在计时，则结束计时
+        if (currentHandwritingStart !== null) {
+          currentHandwritingTime += (Date.now() - currentHandwritingStart);
+          currentHandwritingStart = null;
+          if (currentHandwritingTimeout) {
+            clearTimeout(currentHandwritingTimeout);
+            currentHandwritingTimeout = null;
+          }
+        }
+        // 记录本轮持续时间（单位：毫秒）
+        var roundDuration = Date.now() - currentRoundStartTime;
+        roundDurations.push(roundDuration);
+        typingDurations.push(currentRoundTypingTime);
+        // 【新增】记录手写板区域的操作时长
+       handwritingDurations.push(currentHandwritingTime);
+        stopRound();
+        currentIndex++;
+        if (currentIndex < textList.length) {
+          startRound();
+        } else {
+          alert("Congratulations, you have completed all the tests!");
+          generateCSV();
+        }
+      }
+
+      /************************************************************
+       * 9. 播放音频：根据 audioSlider 随机决定播放英文或日语音频
+       ************************************************************/
+       function playNextTextAndAudio(item) {
+  // 新增：如果 en 分支或 jp 分支已全部播放，则重置，开始新一轮循环播放
+  if (enAudiosLeft.length === 0 || currentJpPairIndex >= item.jp.length) {
+    enAudiosLeft = item.en.audios.slice();
+    currentJpPairIndex = 0;
+  }
+
+  var sliderVal = parseInt(textSlider.value, 10);
+  var chanceEN = (5 - sliderVal) / 4;
+  var useEN = (Math.random() < chanceEN);
+  var textStr, audioSrc;
+
+  if (useEN) {
+    textStr = item.en.text;
+    if (enAudiosLeft.length > 0) {
+      var randIndex = Math.floor(Math.random() * enAudiosLeft.length);
+      audioSrc = enAudiosLeft[randIndex];
+      // 移除已选中的语音，确保不重复
+      enAudiosLeft.splice(randIndex, 1);
+    } else {
+      // 如果 en 语音已全部播放，则切换到 jp 分支
+      useEN = false;
+    }
+  }
+  if (!useEN) {
+    if (currentJpPairIndex < item.jp.length) {
+      textStr = item.jp[currentJpPairIndex].text;
+      audioSrc = item.jp[currentJpPairIndex].audio;
+      currentJpPairIndex++;
+    } else {
+      return;
+    }
+  }
+
+  // 创建文本元素（类似原来的 generateOneText）
+  var fontList = useEN ? fontFamiliesEN : fontFamiliesJP;
+  var font = fontList[Math.floor(Math.random() * fontList.length)];
+  var fontSize = Math.floor(Math.random() * (100 - 20 + 1)) + 20;
+  var color = colorPalette[Math.floor(Math.random() * colorPalette.length)];
+
+  var span = document.createElement('span');
+  span.className = 'floating-text';
+  span.textContent = textStr;
+  span.style.fontFamily = font;
+  span.style.fontSize = fontSize + "px";
+  span.style.color = color;
+  span.style.left = "0px";
+  span.style.top = "0px";
+  document.body.appendChild(span);
+
+  var pos = getNonOverlappingPosition(span);
+  if (pos) {
+    span.style.left = pos.left + "px";
+    span.style.top = pos.top + "px";
+  } else {
+    span.parentNode.removeChild(span);
+  }
+  span.style.animation = "fadeZoomIn 0.8s ease forwards, pulse 2s ease-in-out infinite 0.8s";
+  span.style.opacity = "1";
+  textElements.push(span);
+
+  // 播放语音（文本出现后立即播放）
+  currentAudio = new Audio(audioSrc);
+  currentAudio.play().catch(function(err) {
+    console.log("音频播放被阻止或出错：", err);
+  });
+
+  // 当语音播放结束后，延迟1秒再播放下一条（同步播放）
+  currentAudio.addEventListener('ended', function() {
+    currentAudio = null;
+    nextTextTimeoutId = setTimeout(function() {
+      playNextTextAndAudio(item);
+    }, 1000);
+  });
+  currentAudio.addEventListener('error', function() {
+    currentAudio = null;
+    nextTextTimeoutId = setTimeout(function() {
+      playNextTextAndAudio(item);
+    }, 1000);
+  });
+}
+
+      /************************************************************
+       * 11. 位置/碰撞逻辑保持不变
+       ************************************************************/
+      function getNonOverlappingPosition(elem) {
+        var maxAttempts = 100;
+        var winWidth = window.innerWidth;
+        var winHeight = window.innerHeight;
+        var inputRect = document.getElementById('input-container').getBoundingClientRect();
+        for (var i = 0; i < maxAttempts; i++) {
+          var elemWidth = elem.offsetWidth;
+          var elemHeight = elem.offsetHeight;
+          var randomLeft = Math.floor(Math.random() * (winWidth - elemWidth));
+          var randomTop = Math.floor(Math.random() * (winHeight - elemHeight));
+          elem.style.left = randomLeft + "px";
+          elem.style.top = randomTop + "px";
+          var elemRect = elem.getBoundingClientRect();
+          if (rectsOverlap(elemRect, inputRect)) continue;
+          var overlap = false;
+          for (var j = 0; j < textElements.length; j++) {
+            var otherRect = textElements[j].getBoundingClientRect();
+            if (rectsOverlap(elemRect, otherRect)) {
+              overlap = true;
+              break;
+            }
+          }
+          if (!overlap) {
+            return { left: randomLeft, top: randomTop };
+          }
+        }
+        return null;
+      }
+
+      function rectsOverlap(r1, r2) {
+        return !(r1.right <= r2.left ||
+                 r1.left >= r2.right ||
+                 r1.bottom <= r2.top ||
+                 r1.top >= r2.bottom);
+      }
+
+      function clearTexts() {
+        for (var i = 0; i < textElements.length; i++) {
+          if (textElements[i].parentNode) {
+            textElements[i].parentNode.removeChild(textElements[i]);
+          }
+        }
+        textElements = [];
+      }
+
+      /************************************************************
+       * 12. 检查用户输入（点击箭头或按 Enter 键时进行比对）
+       *     正确答案以英文文本为准
+       ************************************************************/
+      function checkInput() {
+        var userInput = input.value.trim();
+        var correctText = textList[currentIndex].en.text;
+        if (userInput !== "" && userInput === correctText) {
+          input.value = "";
+          nextRound();
+        } else {
+          input.value = "";
+        }
+      }
+
+      submitBtn.addEventListener('click', checkInput);
+      input.addEventListener('keyup', function(e) {
+        if (e.key === "Enter") {
+          checkInput();
+        }
+      });
+      input.addEventListener('keydown', function(e) {
+        var now = Date.now();
+        // 当检测到键盘事件时，如果之前未开始计时，则记录起始时间
+        if (currentTypingStart === null) {
+          currentTypingStart = now;
+        }
+        // 清除之前的计时延时（若存在）
+        if (currentTypingTimeout) {
+          clearTimeout(currentTypingTimeout);
+        }
+        // 设置一个2秒延时，若2秒内无后续键盘事件，则认为打字停止，累计计时
+        currentTypingTimeout = setTimeout(function() {
+          if (currentTypingStart !== null) {
+            currentRoundTypingTime += (Date.now() - currentTypingStart);
+            currentTypingStart = null;
+          }
+        }, 2000);
+      });
+      function generateCSV() {
+        var csvContent = "Round,Round Duration (ms),Typing Duration (ms),Handwriting Duration (ms)\n";
+          for (var i = 0; i < roundDurations.length; i++) {
+            csvContent += (i + 1) + "," + roundDurations[i] + "," + typingDurations[i] + "," + handwritingDurations[i] + "\n";
+          }
+          var blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = "round_metrics.csv";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+      }
+
+
+    });
+  </script>
+</body>
+</html>
